@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CClyticx Carrom League — Organizer</title>
+<link rel="stylesheet" href="shared.css">
+</head>
+<body>
+  <div id="admin-gate">
+    <h3>Organizer sign-in</h3>
+    <p>Enter the tournament password to edit results, the bracket, fixtures, and settings.</p>
+    <input type="password" id="gatePw" placeholder="Password" autocomplete="off">
+    <button id="gateGo">Enter</button>
+    <button class="gate-cancel" id="gateCancel">Back to public dashboard</button>
+    <div class="gate-error" id="gateErr"></div>
+  </div>
+
+  <div id="carrom-app" style="display:none;">Loading tournament…</div>
+
+  <button id="logoffBtn" style="display:none;position:fixed;top:14px;right:14px;z-index:999;padding:7px 14px;border-radius:999px;border:1px solid rgba(255,197,61,0.35);background:rgba(0,0,0,0.55);color:#FFC53D;font-weight:700;font-size:11.5px;cursor:pointer;font-family:inherit;">Log off</button>
+
+  <script>
+    // Must match the API_URL in carrom-core.js exactly.
+    const API_URL = "PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE";
+    const API_CONFIGURED = API_URL.indexOf('PASTE_YOUR') === -1;
+    const DEFAULT_EDIT_PASSWORD = "carrom2026"; // only used as a fallback if no backend is configured yet
+
+    const gate = document.getElementById('admin-gate');
+    const app = document.getElementById('carrom-app');
+    const pw = document.getElementById('gatePw');
+    const err = document.getElementById('gateErr');
+    const goBtn = document.getElementById('gateGo');
+    const logoffBtn = document.getElementById('logoffBtn');
+
+    function unlock(){
+      gate.style.display = 'none';
+      app.style.display = 'block';
+      logoffBtn.style.display = 'block';
+      sessionStorage.setItem('carromAdminAuthed', '1');
+      window.CARROM_ADMIN = true;
+      const s = document.createElement('script');
+      s.src = 'carrom-core.js';
+      document.body.appendChild(s);
+    }
+
+    async function checkPassword(value){
+      if (!API_CONFIGURED) return value === DEFAULT_EDIT_PASSWORD;
+      try {
+        const res = await fetch(API_URL + '?checkpw=' + encodeURIComponent(value));
+        const json = await res.json();
+        return !!json.ok;
+      } catch(e){
+        err.textContent = "Couldn't reach the backend to check the password — try again.";
+        return false;
+      }
+    }
+
+    goBtn.onclick = async () => {
+      goBtn.disabled = true; err.textContent = '';
+      const ok = await checkPassword(pw.value);
+      goBtn.disabled = false;
+      if (ok) unlock();
+      else err.textContent = 'Incorrect password.';
+    };
+    document.getElementById('gateCancel').onclick = () => { window.location.href = 'index.html'; };
+    pw.addEventListener('keydown', (e) => { if (e.key === 'Enter') goBtn.click(); });
+    logoffBtn.onclick = () => {
+      sessionStorage.removeItem('carromAdminAuthed');
+      window.location.reload();
+    };
+
+    if (sessionStorage.getItem('carromAdminAuthed') === '1') unlock();
+    else pw.focus();
+  </script>
+</body>
+</html>
