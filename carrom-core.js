@@ -9,7 +9,7 @@
     { id:'mixed',  label:"Mixed Doubles" },
   ];
   const DEFAULT_GROUP_COUNTS = { mens: 4, womens: 2, mixed: 2 };
-  const DEFAULT_STATE = { groupCounts: Object.assign({}, { mens: 4, womens: 2, mixed: 2 }), teamPlayers: {}, results: {}, winners: {}, seedOverrides: {} };
+  const DEFAULT_STATE = { groupCounts: Object.assign({}, { mens: 4, womens: 2, mixed: 2 }), teamPlayers: {}, results: {}, winners: {}, seedOverrides: {}, knockoutSizes: {} };
   const MIN_GROUPS = 1, MAX_GROUPS = 8;
   const DEFAULT_TEAM_COUNT = 4, MIN_TEAMS = 2, MAX_TEAMS = 8;
 
@@ -17,6 +17,17 @@
   function catGroups(catId){ return groupLetters(data.groupCounts[catId] || DEFAULT_GROUP_COUNTS[catId] || 2); }
   function teamsPerGroup(catId){ return (data.teamCounts && data.teamCounts[catId]) || DEFAULT_TEAM_COUNT; }
   function combosFor(n){ const c=[]; for(let i=0;i<n;i++) for(let j=i+1;j<n;j++) c.push([i,j]); return c; }
+  const MIN_KO = 2, MAX_KO = 16;
+  function defaultKnockoutSize(cat){
+    const groups = catGroups(cat);
+    if (groups.length <= 1) return 0;
+    if (groups.length === 2) return 4; // the classic 1st-vs-opposite-2nd crossover, unchanged
+    return nextPow2(groups.length);
+  }
+  function knockoutSize(cat){
+    const override = data.knockoutSizes && data.knockoutSizes[cat];
+    return override ? nextPow2(override) : defaultKnockoutSize(cat);
+  }
 
   const ui = { cat: 'mens', view: 'standings', saveMsg: '', errorMsg: '', exportMsg: '', pwMsg: '', importMsg: '' };
   let data = JSON.parse(JSON.stringify(DEFAULT_STATE));
@@ -92,6 +103,7 @@
       results: parsed.results || {},
       winners: parsed.winners || {},
       seedOverrides: parsed.seedOverrides || {},
+      knockoutSizes: parsed.knockoutSizes || {},
     };
   }
   function loadLocalCache(){
@@ -128,7 +140,7 @@
         headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // avoids a CORS preflight
         body: JSON.stringify({
           groupCounts: data.groupCounts, teamCounts: data.teamCounts, teamPlayers: data.teamPlayers,
-          results: data.results, winners: data.winners, seedOverrides: data.seedOverrides,
+          results: data.results, winners: data.winners, seedOverrides: data.seedOverrides, knockoutSizes: data.knockoutSizes,
         }),
       });
     } catch(err){
@@ -303,11 +315,22 @@
         { label:'Group '+groups[0]+' · 2nd', team: a[1] },
       ];
     } else {
-      const size = nextPow2(groups.length);
+      const hasOverride = !!(data.knockoutSizes && data.knockoutSizes[cat]);
+      const size = knockoutSize(cat);
       seeds = [];
       for (let i=0;i<size;i++){
-        if (i < groups.length) seeds.push({ label:'Group '+groups[i]+' · 1st', team: standingsByGroup[groups[i]][0] });
-        else seeds.push({ label:'Bye', team:null, bye:true });
+        if (!hasOverride && i < groups.length){
+          // Default behavior: one slot per group, standings decide who fills it.
+          seeds.push({ label:'Group '+groups[i]+' · 1st', team: standingsByGroup[groups[i]][0] });
+        } else if (!hasOverride) {
+          // Default padding when the group count isn't already a power of two.
+          seeds.push({ label:'Bye', team:null, bye:true });
+        } else {
+          // Explicit knockout size larger/smaller than the group count (e.g. Quarter-finals
+          // from 4 groups) — no single unambiguous standings mapping, so these start TBD
+          // and are filled in manually below.
+          seeds.push({ label: roundName(size/2)+' slot '+(i+1), team: null, bye:false });
+        }
       }
     }
 
@@ -762,15 +785,18 @@
   function renderSeedOverridesUI(cat){
     const groups = catGroups(cat);
     if (groups.length <= 1) return '';
-    const standingsByGroup = {};
-    groups.forEach(g => standingsByGroup[g] = computeStandings(cat, g));
     let baseLabels;
     if (groups.length === 2){
       baseLabels = ['Group '+groups[0]+' · 1st', 'Group '+groups[1]+' · 2nd', 'Group '+groups[1]+' · 1st', 'Group '+groups[0]+' · 2nd'];
     } else {
-      const size = nextPow2(groups.length);
+      const hasOverride = !!(data.knockoutSizes && data.knockoutSizes[cat]);
+      const size = knockoutSize(cat);
       baseLabels = [];
-      for (let i=0;i<size;i++) baseLabels.push(i < groups.length ? ('Group '+groups[i]+' · 1st') : 'Bye slot');
+      for (let i=0;i<size;i++){
+        if (!hasOverride && i < groups.length) baseLabels.push('Group '+groups[i]+' · 1st');
+        else if (!hasOverride) baseLabels.push('Bye slot');
+        else baseLabels.push(roundName(size/2)+' slot '+(i+1));
+      }
     }
     const teams = allTeamsFor(cat);
     const overrides = (data.seedOverrides && data.seedOverrides[cat]) || {};
@@ -887,7 +913,16 @@
     out += '<label>Teams per group</label>';
     out += '<input type="number" min="'+MIN_TEAMS+'" max="'+MAX_TEAMS+'" id="teamCountInput" value="'+currentTeams+'">';
     out += '<button id="applyTeamCount">Apply</button>';
-    out += '</div><div class="cd-hint" style="margin-top:8px">Growing either number adds empty slots to fill in below; shrinking just stops showing the extras — their results stay saved if you add them back. Changing teams per group applies to every group in this category.</div></div>';
+    out += '</div><div class="cd-hint" style="margin-top:8px">Growing either number adds empty slots to fill in below; shrinking just stops showing the extras — their results stay saved if you add them back. Changing teams per group applies to every group in this category.</div>';
+    if (current > 2){
+      const currentKo = knockoutSize(cat);
+      out += '<div class="cd-setup-row" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">';
+      out += '<label>Knockout stage size</label>';
+      out += '<input type="number" min="'+MIN_KO+'" max="'+MAX_KO+'" id="koSizeInput" value="'+currentKo+'">';
+      out += '<button id="applyKoSize">Apply</button>';
+      out += '</div><div class="cd-hint" style="margin-top:8px">By default one group winner per group advances straight to the semis. Set this higher (e.g. 8 for Quarter-finals with 4 groups) if more than one pair per group qualifies — you\'ll then assign every knockout slot directly on the Bracket tab instead of relying on group standings.</div>';
+    }
+    out += '</div>';
     return out;
   }
 
@@ -987,6 +1022,19 @@
       n = Math.max(MIN_TEAMS, Math.min(MAX_TEAMS, n));
       data.teamCounts = data.teamCounts || {};
       data.teamCounts[cat] = n;
+      saveState();
+      render();
+    };
+
+    const applyKoBtn = document.getElementById('applyKoSize');
+    if (applyKoBtn) applyKoBtn.onclick = () => {
+      const cat = ui.cat;
+      const input = document.getElementById('koSizeInput');
+      let n = parseInt(input.value, 10);
+      if (isNaN(n)) n = knockoutSize(cat);
+      n = Math.max(MIN_KO, Math.min(MAX_KO, n));
+      data.knockoutSizes = data.knockoutSizes || {};
+      data.knockoutSizes[cat] = n;
       saveState();
       render();
     };
